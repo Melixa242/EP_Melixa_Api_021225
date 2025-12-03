@@ -1,4 +1,4 @@
-package com.example.ep_melixa_api021225;
+package android.example.ep_melixa_api021225;
 
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
@@ -7,8 +7,10 @@ import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ListView;
+import android.widget.Spinner;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
@@ -25,7 +27,15 @@ import java.util.ArrayList;
 
 public class ProductsActivity extends AppCompatActivity implements ProductAdapter.ProductActionListener {
 
-    private static final String API_URL = "https://fakestores.vercel.app/docs";
+    // URL Base de la API FakeStores
+    private static final String API_BASE_URL = "https://fakestores.vercel.app/api";
+    private static final String API_PRODUCTS = API_BASE_URL + "/products";
+
+    // Categorías disponibles
+    private static final String[] CATEGORIES = {
+            "electronics", "jewelery", "men's clothing", "women's clothing"
+    };
+
     private ListView listView;
     private FloatingActionButton fab;
     private ProductAdapter adapter;
@@ -71,17 +81,31 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_product, null);
 
-        final EditText etName = dialogView.findViewById(R.id.et_product_name);
+        final EditText etTitle = dialogView.findViewById(R.id.et_product_name);
         final EditText etDescription = dialogView.findViewById(R.id.et_product_description);
         final EditText etPrice = dialogView.findViewById(R.id.et_product_price);
-        final EditText etStock = dialogView.findViewById(R.id.et_product_stock);
+        final Spinner spinnerCategory = dialogView.findViewById(R.id.spinner_category);
+
+        // Configurar Spinner de categorías
+        ArrayAdapter<String> categoryAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, CATEGORIES
+        );
+        categoryAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerCategory.setAdapter(categoryAdapter);
 
         if (product != null) {
             builder.setTitle("Editar Producto");
-            etName.setText(product.getName());
+            etTitle.setText(product.getTitle());
             etDescription.setText(product.getDescription());
             etPrice.setText(String.valueOf(product.getPrice()));
-            etStock.setText(String.valueOf(product.getStock()));
+
+            // Seleccionar categoría actual
+            for (int i = 0; i < CATEGORIES.length; i++) {
+                if (CATEGORIES[i].equals(product.getCategory())) {
+                    spinnerCategory.setSelection(i);
+                    break;
+                }
+            }
         } else {
             builder.setTitle("Nuevo Producto");
         }
@@ -90,27 +114,42 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
                 .setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        String name = etName.getText().toString().trim();
+                        String title = etTitle.getText().toString().trim();
                         String description = etDescription.getText().toString().trim();
                         String priceStr = etPrice.getText().toString().trim();
-                        String stockStr = etStock.getText().toString().trim();
+                        String category = spinnerCategory.getSelectedItem().toString();
 
-                        if (name.isEmpty() || priceStr.isEmpty() || stockStr.isEmpty()) {
-                            Toast.makeText(ProductsActivity.this, "Complete todos los campos", Toast.LENGTH_SHORT).show();
+                        // Validar campos requeridos
+                        if (title.isEmpty() || priceStr.isEmpty()) {
+                            Toast.makeText(ProductsActivity.this,
+                                    "El título y precio son obligatorios", Toast.LENGTH_SHORT).show();
                             return;
                         }
 
-                        double price = Double.parseDouble(priceStr);
-                        int stock = Integer.parseInt(stockStr);
+                        double price;
+                        try {
+                            price = Double.parseDouble(priceStr);
+                            if (price < 0) {
+                                Toast.makeText(ProductsActivity.this,
+                                        "El precio debe ser positivo", Toast.LENGTH_SHORT).show();
+                                return;
+                            }
+                        } catch (NumberFormatException e) {
+                            Toast.makeText(ProductsActivity.this,
+                                    "Precio inválido", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
 
                         if (product != null) {
-                            product.setName(name);
+                            // Actualizar producto existente
+                            product.setTitle(title);
                             product.setDescription(description);
                             product.setPrice(price);
-                            product.setStock(stock);
+                            product.setCategory(category);
                             new UpdateProductTask().execute(product);
                         } else {
-                            Product newProduct = new Product(name, description, price, stock);
+                            // Crear nuevo producto
+                            Product newProduct = new Product(title, description, price, category);
                             new CreateProductTask().execute(newProduct);
                         }
                     }
@@ -129,7 +168,7 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
     public void onDeleteProduct(final Product product) {
         new AlertDialog.Builder(this)
                 .setTitle("Confirmar eliminación")
-                .setMessage("¿Está seguro de eliminar " + product.getName() + "?")
+                .setMessage("¿Está seguro de eliminar \"" + product.getTitle() + "\"?")
                 .setPositiveButton("Eliminar", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
@@ -140,7 +179,7 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
                 .show();
     }
 
-    // AsyncTask para GET (Obtener productos)
+    // ========== AsyncTask para GET (Obtener productos) ==========
     private class GetProductsTask extends AsyncTask<Void, Void, String> {
         @Override
         protected void onPreExecute() {
@@ -149,13 +188,24 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
 
         @Override
         protected String doInBackground(Void... voids) {
-            try {
-                URL url = new URL(API_URL);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("Content-Type", "application/json");
+            HttpURLConnection conn = null;
+            BufferedReader reader = null;
 
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            try {
+                URL url = new URL(API_PRODUCTS);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Accept", "application/json");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+
+                int responseCode = conn.getResponseCode();
+                if (responseCode != HttpURLConnection.HTTP_OK) {
+                    return null;
+                }
+
+                reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder response = new StringBuilder();
                 String line;
 
@@ -163,13 +213,18 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
                     response.append(line);
                 }
 
-                reader.close();
-                conn.disconnect();
-
                 return response.toString();
+
             } catch (Exception e) {
                 e.printStackTrace();
                 return null;
+            } finally {
+                if (reader != null) {
+                    try { reader.close(); } catch (Exception e) { e.printStackTrace(); }
+                }
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
         }
 
@@ -184,49 +239,53 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
 
                     for (int i = 0; i < jsonArray.length(); i++) {
                         JSONObject obj = jsonArray.getJSONObject(i);
-                        Product product = new Product(
-                                obj.getInt("id"),
-                                obj.getString("name"),
-                                obj.getString("description"),
-                                obj.getDouble("price"),
-                                obj.getInt("stock")
-                        );
+                        Product product = new Product(obj);
                         productList.add(product);
                     }
 
                     adapter.notifyDataSetChanged();
+                    Toast.makeText(ProductsActivity.this,
+                            productList.size() + " productos cargados", Toast.LENGTH_SHORT).show();
+
                 } catch (Exception e) {
-                    Toast.makeText(ProductsActivity.this, "Error al procesar datos", Toast.LENGTH_SHORT).show();
+                    e.printStackTrace();
+                    Toast.makeText(ProductsActivity.this,
+                            "Error al procesar datos", Toast.LENGTH_SHORT).show();
                 }
             } else {
-                Toast.makeText(ProductsActivity.this, "Error de conexión", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Error de conexión", Toast.LENGTH_SHORT).show();
             }
         }
     }
 
-    // AsyncTask para POST (Crear producto)
+    // ========== AsyncTask para POST (Crear producto) ==========
     private class CreateProductTask extends AsyncTask<Product, Void, Boolean> {
         @Override
         protected void onPreExecute() {
+            progressDialog.setMessage("Creando producto...");
             progressDialog.show();
         }
 
         @Override
         protected Boolean doInBackground(Product... products) {
+            HttpURLConnection conn = null;
+
             try {
                 Product product = products[0];
-                URL url = new URL(API_URL);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                URL url = new URL(API_PRODUCTS);
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
+                conn.setRequestProperty("Accept", "application/json");
                 conn.setRequestProperty("Content-Type", "application/json");
                 conn.setDoOutput(true);
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
-                JSONObject jsonProduct = new JSONObject();
-                jsonProduct.put("name", product.getName());
-                jsonProduct.put("description", product.getDescription());
-                jsonProduct.put("price", product.getPrice());
-                jsonProduct.put("stock", product.getStock());
+                // Convertir producto a JSON
+                JSONObject jsonProduct = product.toJSON();
 
+                // Enviar JSON
                 OutputStream os = conn.getOutputStream();
                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(os, "UTF-8"));
                 writer.write(jsonProduct.toString());
@@ -235,12 +294,16 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
                 os.close();
 
                 int responseCode = conn.getResponseCode();
-                conn.disconnect();
+                return responseCode == HttpURLConnection.HTTP_OK ||
+                        responseCode == HttpURLConnection.HTTP_CREATED;
 
-                return responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_CREATED;
             } catch (Exception e) {
                 e.printStackTrace();
                 return false;
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
         }
 
@@ -249,37 +312,43 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
             progressDialog.dismiss();
 
             if (success) {
-                Toast.makeText(ProductsActivity.this, "Producto creado exitosamente", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Producto creado exitosamente", Toast.LENGTH_SHORT).show();
                 loadProducts();
             } else {
-                Toast.makeText(ProductsActivity.this, "Error al crear producto", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Error al crear producto", Toast.LENGTH_SHORT).show();
             }
         }
     }
 
-    // AsyncTask para PUT (Actualizar producto)
+    // ========== AsyncTask para PUT (Actualizar producto) ==========
     private class UpdateProductTask extends AsyncTask<Product, Void, Boolean> {
         @Override
         protected void onPreExecute() {
+            progressDialog.setMessage("Actualizando producto...");
             progressDialog.show();
         }
 
         @Override
         protected Boolean doInBackground(Product... products) {
+            HttpURLConnection conn = null;
+
             try {
                 Product product = products[0];
-                URL url = new URL(API_URL + "/" + product.getId());
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                URL url = new URL(API_PRODUCTS + "/" + product.getId());
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("PUT");
+                conn.setRequestProperty("Accept", "application/json");
                 conn.setRequestProperty("Content-Type", "application/json");
                 conn.setDoOutput(true);
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
-                JSONObject jsonProduct = new JSONObject();
-                jsonProduct.put("name", product.getName());
-                jsonProduct.put("description", product.getDescription());
-                jsonProduct.put("price", product.getPrice());
-                jsonProduct.put("stock", product.getStock());
+                // Convertir producto a JSON
+                JSONObject jsonProduct = product.toJSON();
 
+                // Enviar JSON
                 OutputStream os = conn.getOutputStream();
                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(os, "UTF-8"));
                 writer.write(jsonProduct.toString());
@@ -288,12 +357,15 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
                 os.close();
 
                 int responseCode = conn.getResponseCode();
-                conn.disconnect();
-
                 return responseCode == HttpURLConnection.HTTP_OK;
+
             } catch (Exception e) {
                 e.printStackTrace();
                 return false;
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
         }
 
@@ -302,36 +374,47 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
             progressDialog.dismiss();
 
             if (success) {
-                Toast.makeText(ProductsActivity.this, "Producto actualizado exitosamente", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Producto actualizado exitosamente", Toast.LENGTH_SHORT).show();
                 loadProducts();
             } else {
-                Toast.makeText(ProductsActivity.this, "Error al actualizar producto", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Error al actualizar producto", Toast.LENGTH_SHORT).show();
             }
         }
     }
 
-    // AsyncTask para DELETE (Eliminar producto)
+    // ========== AsyncTask para DELETE (Eliminar producto) ==========
     private class DeleteProductTask extends AsyncTask<Product, Void, Boolean> {
         @Override
         protected void onPreExecute() {
+            progressDialog.setMessage("Eliminando producto...");
             progressDialog.show();
         }
 
         @Override
         protected Boolean doInBackground(Product... products) {
+            HttpURLConnection conn = null;
+
             try {
                 Product product = products[0];
-                URL url = new URL(API_URL + "/" + product.getId());
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                URL url = new URL(API_PRODUCTS + "/" + product.getId());
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("DELETE");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
                 int responseCode = conn.getResponseCode();
-                conn.disconnect();
+                return responseCode == HttpURLConnection.HTTP_OK ||
+                        responseCode == HttpURLConnection.HTTP_NO_CONTENT;
 
-                return responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_NO_CONTENT;
             } catch (Exception e) {
                 e.printStackTrace();
                 return false;
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
         }
 
@@ -340,10 +423,12 @@ public class ProductsActivity extends AppCompatActivity implements ProductAdapte
             progressDialog.dismiss();
 
             if (success) {
-                Toast.makeText(ProductsActivity.this, "Producto eliminado exitosamente", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Producto eliminado exitosamente", Toast.LENGTH_SHORT).show();
                 loadProducts();
             } else {
-                Toast.makeText(ProductsActivity.this, "Error al eliminar producto", Toast.LENGTH_SHORT).show();
+                Toast.makeText(ProductsActivity.this,
+                        "Error al eliminar producto", Toast.LENGTH_SHORT).show();
             }
         }
     }
